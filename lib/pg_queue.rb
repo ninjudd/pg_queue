@@ -1,3 +1,7 @@
+require 'pgq/batch'
+require 'pgq/batch_event'
+require 'pgq/observer_batch_event'
+
 class PGQueue
   attr_reader :config, :name, :consumer_id
 
@@ -20,13 +24,9 @@ class PGQueue
   end
   
   def each
-    batch_id = connection.select_value("SELECT pgq.next_batch('#{name}', '#{consumer_id}')")
-    result   = connection.exec("SELECT pgq.get_batch_events(#{batch_id})")
-      
-    result.each do |row|
-      yield BatchEvent.new(connection, batch_id, row)
+    PGQ::Batch.new(@connection, name, consumer_id).each do |batch_event|
+      yield batch_event
     end
-    connection.exec("SELECT pgq.finish_batch(#{batch_id})")
   end
 
   def self.install(opts)
@@ -89,4 +89,4 @@ class PGQueue
   end
 end
 
-ActiveRecord.extend(PGQueue::ActiveRecordExtension)
+ActiveRecord.extend(PGQueue::ActiveRecordExtension) if defined?(ActiveRecord)

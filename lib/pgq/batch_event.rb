@@ -1,9 +1,12 @@
-module PGQueue
+require 'time'
+require 'parsedate'
+
+module PGQ
   class BatchEvent
     attr_reader :connection, :batch_id
 
     def self.event_type(type)
-      PGQueue::BatchEvent.registered_event_types[type.to_s] = self.class
+      PGQ::BatchEvent.registered_event_types[type.to_s] = self
     end
     
     def self.alias_ev_fields(map)
@@ -13,7 +16,9 @@ module PGQueue
     end
     
     def self.new(connection_, batch_id_, db_row)
-      if self == PGQueue::BatchEvent
+      return nil if db_row.nil?
+      
+      if self == PGQ::BatchEvent
         @type_idx ||= columns.index(:ev_type)
         registered_class = registered_event_types[db_row[@type_idx]]
         return registered_class.new(connection_, batch_id_, db_row) if registered_class
@@ -29,14 +34,21 @@ module PGQueue
       self.class.columns.each_with_index do |col, ii|
         instance_variable_set("@#{col}".to_sym, db_row[ii])
       end
+      
+      # convert ev_id and ev_txid into numbers
+      @ev_id   = @ev_id.to_i
+      @ev_txid = @ev_txid.to_i
+      
+      # parse ev_time into a Time object
+      @ev_time = Time.local(*ParseDate.parsedate(@ev_time)) unless @ev_time.nil?
     end
     
     def fail!(reason)
-      connection.query("SELECT pgq.event_failed(#{batch_id}, #{ev_id}, '#{connection.quote_string(reason)}')")
+      connection.exec("SELECT pgq.event_failed(#{batch_id}, #{ev_id}, #{connection.quote(reason)})")
     end
     
     def retry!(retry_seconds)
-      connection.query("SELECT pgq.event_retry(#{batch_id}, #{ev_id}, #{retry_seconds})")
+      connection.exec("SELECT pgq.event_retry(#{batch_id}, #{ev_id}, #{retry_seconds})")
     end
     
   protected

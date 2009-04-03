@@ -2,13 +2,14 @@ require 'rubygems'
 require 'test/unit'
 require 'shoulda'
 require 'mocha'
+require 'pp'
 
 $LOAD_PATH.unshift("#{File.dirname(__FILE__)}/../lib")
 $LOAD_PATH.unshift(File.dirname(__FILE__))
 require 'pg_queue'
-require 'pg_queue/batch'
-require 'pg_queue/batch_event'
-require 'pg_queue/observer_batch_event'
+require 'pgq/batch'
+require 'pgq/batch_event'
+require 'pgq/observer_batch_event'
 
 class Test::Unit::TestCase
 end
