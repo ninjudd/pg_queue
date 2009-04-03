@@ -19,8 +19,12 @@ class ObserverBatchEventTest < Test::Unit::TestCase
     end
     
     should "map columns to trigger attributes" do
-      assert_equal 'first_names',  @batch_event.table_name
-      ## MORE
+      assert_equal 'first_names',               @batch_event.table_name
+      assert_equal 'UPDATE',                    @batch_event.operation
+      assert_equal({'id' => '1',
+                    'first_name' => 'Bob' },    @batch_event.old_row)
+      assert_equal({'id' => '1',
+                    'first_name' => 'Robert' }, @batch_event.new_row)
     end
   end
 end
