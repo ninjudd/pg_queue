@@ -1,81 +1,92 @@
-module PGQueue
-  ASYNC = 'async' # Used for queue and consumer.
+class PGQueue
+  attr_reader :config, :name, :consumer_id
 
-  def pgq_install
-    system!("pgqadm.py #{pgq_ini} install", :verbose => true)
+  def initialize(opts)
+    @connection  = opts.delete(:connection)
+    @name        = opts.delete(:name)
+    @consumer_id = opts.delete(:consumer_id) || @name
+    @config      = opts
+
+    # Register the consumer in case it hasn't been registered yet.
+    connection.exec("SELECT pgq.register_consumer(#{connection.quote(name)}, #{connection.quote(consumer_id)})")
+  end
+
+  def db
+    config[:db]
+  end
+
+  def connection
+    @connection ||= PGconn.connect(db[:host], db[:port], nil, nil, db[:database], db[:user], db[:password])
   end
   
-  def pgq_start
-    system!("pgqadm.py -d #{pgq_ini} ticker", :verbose => true)
+  def each
+    batch_id = connection.select_value("SELECT pgq.next_batch('#{name}', '#{consumer_id}')")
+    result   = connection.exec("SELECT pgq.get_batch_events(#{batch_id})")
+      
+    result.each do |row|
+      yield BatchEvent.new(connection, batch_id, row)
+    end
+    connection.exec("SELECT pgq.finish_batch(#{batch_id})")
+  end
+
+  def self.install(opts)
+    system("pgqadm.py #{config_file(opts)} install")
+    raise 'unable to install pgq' if $?.exitstatus != 0
   end
   
-  def pgq_stop
-    system!("pgqadm.py -s #{pgq_ini} ticker", :verbose => true)
+  def self.start(opts)
+    system("pgqadm.py -d #{config_file(opts)} ticker")
+    raise 'unable to start pgq ticker' if $?.exitstatus != 0
   end
   
-  def pgq_init_async
-    execute %{
-      SELECT pgq.create_queue('#{ASYNC}');
-      SELECT pgq.register_consumer('#{ASYNC}', '#{ASYNC}');
+  def self.stop(opts)
+    system("pgqadm.py -s #{config_file(opts)} ticker")
+    raise 'unable to stop pgq ticker' if $?.exitstatus != 0
+  end
 
-      CREATE OR REPLACE FUNCTION execute_async(text) RETURNS VOID AS $$
-        BEGIN
-          PERFORM pgq.insert_event('#{ASYNC}', 'execute', $1);
-        END
-      $$ LANGUAGE plpgsql;
-
-      CREATE OR REPLACE FUNCTION process_async_statements() RETURNS integer AS $$
-        DECLARE
-          batch_id        integer;
-          batch_size      integer;
-          r               record;
-          status_sequence text;
-        BEGIN
-          batch_size := 0;
-          batch_id := pgq.next_batch('#{ASYNC}', '#{ASYNC}');
-    
-          IF batch_id IS NOT NULL THEN
-            status_sequence := '#{ASYNC}' || '_batch_' || batch_id;
-            EXECUTE('CREATE SEQUENCE ' || status_sequence);
-
-            FOR r IN SELECT * from pgq.get_batch_events(batch_id) LOOP
-              batch_size := batch_size + 1;              
-
-              EXECUTE(r.ev_data);
-              PERFORM nextval(status_sequence);
-            END LOOP;
-            PERFORM pgq.finish_batch(batch_id);
-            EXECUTE('DROP SEQUENCE ' || status_sequence);
-          END IF;
-          RETURN batch_size;
-        END
-      $$ LANGUAGE plpgsql;
+  def self.config
+    @config ||= {
+      :maint_delay => 10,
+      :loop_delay  => 0.1,
+      :logfile     => './log/%(job_name)s.log',
+      :pidfile     => './log/%(job_name)s.pid',
     }
   end
 
-  def pgq_process_async(opts = {})
-    loop do
-      begin
-        result = select_value("SELECT process_async_statements()").to_i
-        puts "#{Time.now.strftime('%Y/%m/%d %H:%M:%S')} Processed batch of size #{result}" if opts[:verbose] and result != 0
-      rescue ActiveRecord::StatementInvalid => e
-        puts e.message
-      end
-                  
-      sleep(0.25) if result == 0
-    end
+  class << self
+    attr_accessor :config_dir
   end
 
-private
+  def self.config_file(opts)
+    opts = config.merge(opts)
+    db   = opts.delete(:db)
+    opts[:job_name] ||= "#{db[:host]}-#{db[:port]}-#{db[:database]}"
+    filename = "#{config_dir}/#{opts[:job_name]}.ini"
 
-  def pgq_ini
-    infile  = RAILS_ROOT + '/config/pgq.ini.template'
-    outfile = RAILS_ROOT + '/config/pgq.ini'
-    
-    db = @config # for ERB binding
-    File.open(outfile, 'w') do |file|
-      file << ERB.new(IO.read(infile), nil, '<%>').result(binding)
+    File.open(filename, 'w') do |file|
+      file.puts '[pgqadm]'
+      file.puts "db = user=#{db[:user]} dbname=#{db[:database]} port=#{db[:port]} host=#{db[:host]} password=#{db[:password]}"
+      opts.each do |key, value|
+        file.puts "#{key} = #{value}"
+      end
     end
-    outfile
+    filename
+  end
+
+  module ActiveRecordExtension
+    def pgq(name, opts = {})
+      opts[:name] = name
+      opts[:connection] ||= connection.raw_connection
+      opts[:db]         ||= connection.instance_variable_get(:@config)
+      PGQueue.new(opts)
+    end
+
+    def install_pgq_observer(name, opts = {})
+      queue = pgq(name, opts)
+      
+      # add trigger
+    end
   end
 end
+
+ActiveRecord.extend(PGQueue::ActiveRecordExtension)
