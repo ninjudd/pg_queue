@@ -1,6 +1,6 @@
-require 'pgq/batch'
-require 'pgq/batch_event'
-require 'pgq/observer_batch_event'
+$:.unshift(File.dirname(__FILE__))
+require 'pgq/event'
+require 'pgq/trigger_event'
 
 class PGQueue
   attr_reader :config, :name, :consumer_id
@@ -24,9 +24,29 @@ class PGQueue
   end
   
   def each
-    PGQ::Batch.new(@connection, name, consumer_id).each do |batch_event|
-      yield batch_event
+    batch_id = connection.select_value("SELECT pgq.next_batch('#{name}', '#{consumer_id}')")
+    return unless batch_id
+    
+    connection.exec("SELECT pgq.get_batch_events(#{batch_id})").each do |row|
+      yield Event.new(row, :connection => connection, :batch_id => batch_id)
     end
+    connection.exec("SELECT pgq.finish_batch(#{batch_id})")
+  end
+
+  def install_trigger_observer(opts)
+    raise 'cannot install trigger without table_name' unless opts[:table_name]
+    opts[:operations] ||= ['INSERT', 'UPDATE', 'DELETE']
+    trigger_name = "observe_#{opts[:table_name]}_for_#{name}"
+    connection.exec %{
+      CREATE OR REPLACE FUNCTION #{trigger_name}() RETURNS TRIGGER AS $$        
+        BEGIN
+          pgq.insert_event(#{connection.quote(name)}, 'trigger', TG_TABLE_NAME, TG_OP, OLD::text, NEW::text, NULL);
+          RETURN NULL;
+        END
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER #{trigger_name} AFTER #{opts[:operations].join(' OR ')} ON search_profiles
+        FOR EACH ROW EXECUTE PROCEDURE #{trigger_name}();
+    }
   end
 
   def self.install(opts)
@@ -83,8 +103,7 @@ class PGQueue
 
     def install_pgq_observer(name, opts = {})
       queue = pgq(name, opts)
-      
-      # add trigger
+      queue.install_trigger_observer(opts.merge(:table_name => table_name)
     end
   end
 end
