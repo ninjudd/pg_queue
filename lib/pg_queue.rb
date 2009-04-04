@@ -1,9 +1,11 @@
 $:.unshift(File.dirname(__FILE__))
-require 'pgq/event'
-require 'pgq/trigger_event'
+require 'pg_queue/event'
+require 'pg_queue/trigger_event'
 
 class PGQueue
   attr_reader :config, :name, :consumer_id
+
+  include Enumerable
 
   def initialize(opts)
     @connection  = opts.delete(:connection)
@@ -24,7 +26,7 @@ class PGQueue
   end
   
   def each
-    batch_id = connection.select_value("SELECT pgq.next_batch('#{name}', '#{consumer_id}')")
+    batch_id = connection.query("SELECT pgq.next_batch('#{name}', '#{consumer_id}')").first
     return unless batch_id
     
     connection.exec("SELECT pgq.get_batch_events(#{batch_id})").each do |row|
@@ -103,7 +105,7 @@ class PGQueue
 
     def install_pgq_observer(name, opts = {})
       queue = pgq(name, opts)
-      queue.install_trigger_observer(opts.merge(:table_name => table_name)
+      queue.install_trigger_observer(opts.merge(:table_name => table_name))
     end
   end
 end

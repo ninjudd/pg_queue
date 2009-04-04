@@ -1,6 +1,6 @@
 require 'csv'
 
-module PGQueue
+class PGQueue
   class TriggerEvent < Event
     attr_reader :old_record, :new_record
     
@@ -20,12 +20,12 @@ module PGQueue
     def parse_record_fields
       if extra2
         @old_record = {}
-        old_row = CSV::Reader.parse(extra2[1..-2])
+        old_row = CSV::Reader.parse(extra2[1..-2]).to_a.first
       end
 
       if extra3
         @new_record = {}
-        new_row = CSV::Reader.parse(extra3[1..-2])
+        new_row = CSV::Reader.parse(extra3[1..-2]).to_a.first
       end
 
       columns_for_table(table_name).each do |col|
@@ -38,7 +38,7 @@ module PGQueue
       @columns_for_table ||= {}
       @columns_for_table[table_name.to_s] ||= connection.select_values %{
         SELECT column_name from information_schema.columns WHERE table_name = '#{table_name}'
-      }
+      }.strip
     end
   end
 end

@@ -1,25 +1,27 @@
 require 'time'
 require 'parsedate'
 
-module PGQueue
+class PGQueue
   class Event
     attr_reader :connection, :batch_id
 
     def self.event_type(type)
-      event_class_by_type[type.to_s] = self
+      @@event_class_by_type ||= {}
+      @@event_class_by_type[type.to_s] = self
     end
     
-    def self.event_class_by_type
-      @event_class_by_type ||= {}
+    def self.event_class(type)
+      @@event_class_by_type ||= {}
+      @@event_class_by_type[type.to_s]
     end
     
     def self.new(row, opts)
-      return nil if record.nil?
+      return nil if row.nil?
       
-      if self == PGQ::Event
-        type = row[type_index]
-        event_class = event_class_by_type[type]
-        return event_class.new(row, opts) if event_class
+      if self == PGQueue::Event
+        type  = row[type_index]
+        klass = event_class(type)
+        return klass.new(row, opts) if klass
       end
       
       super
@@ -28,13 +30,12 @@ module PGQueue
     def initialize(row, opts)
       @connection = opts[:connection]
       @batch_id   = opts[:batch_id]
-      
       self.class.columns.each_with_index do |column, i|
         instance_variable_set("@#{column}".to_sym, row[i])
       end
       
       @id   = @id.to_i
-      @txid = @txid.to_ix
+      @txid = @txid.to_i
       @time = Time.local(*ParseDate.parsedate(@time)) unless @time.nil?
     end
     
